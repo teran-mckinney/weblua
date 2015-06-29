@@ -1,4 +1,0 @@
-0.2 - 06-04-2007 - Corrected HTTP_COOKIE (from HTTP_COOKIES) in cgi.lua. Many
-spelling and grammar corrections in the readme, I must have written that
-late at night :-). Minor correction in the Zenserver default page
-example (only one so far).

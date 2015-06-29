@@ -1,0 +1,205 @@
+#!/usr/bin/lua
+---------------------------------------------------------------------
+-- WebLua 0.3
+---------------------------------------------------------------------
+-- This script should be run by FastCGI.
+---------------------------------------------------------------------
+-- This is forked from lfcgi, which was created by garyng2000. AFIAK: they were
+-- forked from Kepler's FastCGI code; and thus released under the MIT license.
+-- The Kepler team also has a copyright on the original Kepler code. The
+-- original lfcgi code can be found at the WebLua website -
+-- http://go-beyond.org/weblua . Other parts of the code were copied in from
+-- miscelanous files without licenses or mention of who the original author
+-- might be.
+---------------------------------------------------------------------
+-- Written by Teran McKinney and released under the GNU Public License
+-- version 3. Copyright 2008 by Teran McKinney.
+---------------------------------------------------------------------
+-- Kudos to #lua of the Freenode IRC network, for all of their help in making
+-- this possible.
+---------------------------------------------------------------------
+
+local wlversion = 0.3
+local configfile = "/etc/weblua/weblua.conf"
+
+require "lfcgi"
+
+-- CGI variables and stuff for inside WebLua
+-- No POST support yet.
+wl={version=wlversion,get={},post={},loadedmodules={},config={alowedmodules={}}}
+
+local accept
+
+	io.stdout = lfcgi.stdout
+	io.stderr = lfcgi.stderr
+	io.stdin = lfcgi.stdin
+	os.getenv = lfcgi.getenv
+	accept = lfcgi.accept
+	std = lfcgi.stdout
+	
+	write = function (text)
+		std:write(text, '\n')
+	end
+	function print(...)
+		for _,v in ipairs({...}) do
+		  std:write(tostring(v), '\t')
+		end
+		std:write ('\n')
+	end
+
+
+local _G_mt = {__index = _G}
+
+local function run(file)
+	pcall(setfenv(loadfile(file) or function() end, setmetatable({}, _G_mt)))
+end
+
+-- Local functions needed by Weblua-accessible functions
+
+local html_codes = {
+    [string.char(tonumber('0xE4', 16))] = '&auml;',
+    [string.char(tonumber('0xC4', 16))] = '&Auml;',
+    [string.char(tonumber('0xF6', 16))] = '&ouml;',
+    [string.char(tonumber('0xD6', 16))] = '&Ouml;',
+    [string.char(tonumber('0xFC', 16))] = '&uuml;',
+    [string.char(tonumber('0xDC', 16))] = '&Uuml;',
+    [string.char(tonumber('0xDF', 16))] = '&szlig;',
+    [string.char(tonumber('0xA4', 16))] = '&euro;',
+    [string.char(tonumber('0x3C', 16))] = '&lt;',
+    [string.char(tonumber('0x3E', 16))] = '&gt;',
+    [string.char(tonumber('0x26', 16))] = '&amp;',
+    [string.char(tonumber('0x22', 16))] = '&quot;'
+}
+
+local html_codes_match = '['
+    for code, _ in pairs(html_codes) do
+        html_codes_match = html_codes_match .. code
+    end
+html_codes_match = html_codes_match .. ']'
+
+local function html_map(str)
+    return html_codes[str]
+end
+
+
+-- WebLua-accessible functions
+
+function wl_send_headers(status,content)
+	local wlstatus = status or "200"
+	local wlcontent = content or "text/html"
+	std:write("Content-type: ", wlcontent,"\r\n")
+	std:write("Status: ", wlstatus,"\r\n\r\n")
+end
+
+function wl_hex_to_ch(str)
+    return string.char(tonumber(str,16))
+end
+
+
+function wl_decode_url(text)
+    -- convert '+' to spaces, and convert hex codes to characters
+    return string.gsub(string.gsub(text, '+', ' '), '%%(%x%x)', wl_hex_to_ch)
+end
+
+
+function wl_decode(str, t, terminator)
+    local k, v, first, pos
+    local last = 0
+    local len = string.len(str)
+
+    while (last and last < len) do
+        pos = last + 1
+
+        first, last = string.find(str, '=', pos, true)
+        if (not first) then
+            k = string.sub(str, pos)
+            v = ''
+        else
+            k = string.sub(str, pos, first - 1)
+
+            pos = last + 1
+
+            first, last = string.find(str, terminator, pos, true)
+            if (not first) then
+                v = string.sub(str, pos)
+            else
+                v = string.sub(str, pos, first - 1)
+            end
+        end
+        t[k] = wl_decode_url(v)
+    end
+end
+
+function wl_decode_get()
+str = os.getenv("QUERY_STRING") or ''
+t = wl.get
+terminator = '&'
+wl_decode(str,t,terminator)
+end
+
+function wl_html_encode(text)
+    return (string.gsub(text, html_codes_match, html_map))
+end
+
+-- Read the configuration file if it exists.
+if configfile then
+local file = io.open (configfile, "r")
+if file then
+	file:close()
+	dofile (configfile)
+	if modules then
+	wl.modules=modules
+	if preloadedmodules then
+	for _,preloadedmodule in pairs(preloadedmodules) do
+		local file = io.open (wl.modules[preloadedmodule][1], "r")
+		if file then
+			dofile(wl.modules[preloadedmodule][1])
+		else
+			return(1)
+		end
+	end
+	end
+	-- Configuration file dependent functions
+function wl_load_module(module)
+for allowedmodule,table in pairs(wl.modules) do
+	if (allowedmodule==module) then
+		if preloadedmodules then
+		for _,preloadedmodule in pairs(preloadedmodules) do
+			if (preloadedmodule == module) then
+				return(3)
+			end
+		end
+		end
+		local file = io.open (table[1], "r")
+		if file then
+			file:close()
+			dofile(table[1])
+		else
+			return(1)
+		end
+	else
+		return(2)
+	end
+return (0)
+end
+end
+end
+
+
+end
+end
+
+-- Where requests are served:
+while accept() >= 0 do
+	wl.script_filename = os.getenv'SCRIPT_FILENAME' or nil
+	wl.path_translated = os.getenv'PATH_TRANSLATED' or ""
+	wl.script_name = os.getenv'SCRIPT_NAME' or ""
+	wl.docroot = os.getenv'DOCUMENT_ROOT'
+	wl.script_base_name = wl.script_name:match("[^/]*$")
+	wl.path_info = os.getenv'PATH_INFO' or '/'
+  
+	if wl.script_filename then
+		wl.pwd = wl.script_filename:match(".*[/]")
+		run(wl.script_filename)
+	end
+end 
